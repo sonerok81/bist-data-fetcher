@@ -1,0 +1,8 @@
+investpy
+yfinance
+pandas
+numpy
+pandas_ta
+joblib
+arch
+streamlit
