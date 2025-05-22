@@ -1,3 +1,4 @@
+# pipeline.py
 import pandas as pd
 import numpy as np
 from arch import arch_model
@@ -8,17 +9,11 @@ SHARPE_THRESHOLD = 0.3
 SORTINO_THRESHOLD = 0.8
 ATR_MIN = 0.001   # %0.1
 ATR_MAX = 0.10    # %10
-MOMENTUM_THRESHOLD = 0.0  # pozitif momentum yeterli olsun
-RSI_MIN = 30
-RSI_MAX = 90
-VOLUME_MULT = 0.8         # hacim filtresi (vol > 0.8*ort hacim)
-FALLBACK_TOP_N = 10       # eşiği geçen yoksa en iyi N hisse
 
 # 1) Veri yükleme: Son 500 iş günü
 def load_raw_data() -> pd.DataFrame:
     df = fetch_and_save_ohlcv(period="2y", interval="1d")
     df.index = pd.to_datetime(df.index)
-    print(f"Veri yüklendi, toplam gün sayısı: {len(df)}")
     return df.tail(500)
 
 # 2) RSI hesaplama
@@ -61,9 +56,9 @@ def compute_return_stats(close: pd.DataFrame) -> pd.DataFrame:
 
 # 5) GARCH pozisyon ağırlığı
 def compute_garch_weights(close: pd.DataFrame, target_vol: float = 0.15) -> pd.Series:
-    rets = close.pct_change().dropna() * 100
+    rets = close.pct_change(fill_method=None) * 100
     weights = {}
-    for sym in rets.columns:
+    for sym in close.columns:
         series = rets[sym].dropna()
         try:
             am = arch_model(series, vol='Garch', p=1, q=1).fit(disp='off')
@@ -71,27 +66,23 @@ def compute_garch_weights(close: pd.DataFrame, target_vol: float = 0.15) -> pd.S
             weights[sym] = target_vol / np.sqrt(fvar * 252)
         except:
             weights[sym] = 0.0
-    print(f"GARCH ağırlıkları hesaplandı: {len(weights)} hisse")
     return pd.Series(weights)
 
 # 6) Teknik sinyaller
 def compute_tech_signals(close: pd.DataFrame, vol: pd.DataFrame) -> pd.Series:
-    sma20 = close.rolling(20).mean()
-    sma50 = close.rolling(50).mean()
     rsi = compute_rsi(close)
     vol_ma = vol.rolling(20).mean()
-    mom3m = close.pct_change(periods=63).fillna(0)
+    mom3m = close.pct_change(periods=63, fill_method=None)
     cond = (
-        (mom3m > MOMENTUM_THRESHOLD) &
-        (rsi > RSI_MIN) & (rsi < RSI_MAX) &
-        (vol > VOLUME_MULT * vol_ma)
+        (mom3m > 0) &
+        (rsi > 30) & (rsi < 90) &
+        (vol > 0.8 * vol_ma)
     )
-    # Son zaman dilimindeki maskeyi alın
     mask = cond.iloc[-1]
     print(f"Teknik sinyaller hesaplandı: {mask.sum()}/{len(mask)} hisse")
     return mask
 
-# 7) Pipeline
+# 7) Ana pipeline fonksiyonu
 def run_pipeline() -> pd.DataFrame:
     raw = load_raw_data()
     close = raw.xs('Close', axis=1, level=1)
@@ -101,7 +92,6 @@ def run_pipeline() -> pd.DataFrame:
 
     stats = compute_return_stats(close)
     filtered1 = stats[(stats.Sharpe >= SHARPE_THRESHOLD) & (stats.Sortino >= SORTINO_THRESHOLD)].index
-    print(f"Sharpe/Sortino filtresinden kalan: {len(filtered1)} hisse")
 
     atr_df = compute_atr(high, low, close)
     atr_pct = atr_df.div(close)
@@ -109,19 +99,15 @@ def run_pipeline() -> pd.DataFrame:
     print("ATR yüzdesi dağılımı:")
     print(latest_atr.describe())
     filtered2 = latest_atr[(latest_atr >= ATR_MIN) & (latest_atr <= ATR_MAX)].index
-    print(f"ATR filtresinden kalan: {len(filtered2)} hisse")
 
     universe = set(filtered1) & set(filtered2)
-    print(f"Nicel evren boyutu: {len(universe)} hisse")
-
     if not universe:
-        top10 = stats.sort_values('Sharpe', ascending=False).head(FALLBACK_TOP_N).index
+        top10 = stats.sort_values('Sharpe', ascending=False).head(10).index
         universe = set(top10)
-        print(f"Fallback: En iyi {FALLBACK_TOP_N} Sharpe hisse: {list(universe)}")
+        print(f"Fallback: En iyi 10 Sharpe hisse: {list(universe)}")
 
     tech_mask = compute_tech_signals(close, vol)
     final = sorted([s for s in universe if tech_mask.get(s, False)])
-    print(f"Teknik onay sonrası kalan: {len(final)} hisse -> {final}")
 
     if not final:
         return pd.DataFrame(columns=['Ticker','Sharpe','Sortino','ATR%','Weight'])
@@ -142,5 +128,5 @@ if __name__ == '__main__':
     if df.empty:
         print("Hiç hisse kriterleri karşılamadı.")
     else:
-        print("Seçilen Hisseler ve Ağırlıklar:")
+        print("Tüm taranan hisseler:")
         print(df.to_string(index=False))
