@@ -1,0 +1,31 @@
+name: Günlük BIST Pipeline
+
+# Pazartesiden cumaya her gün 18:20'de çalışsın (UTC+3  15:20 UTC)
+on:
+  schedule:
+    - cron: '20 15 * * 1-5'
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Python kurulumu
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Bağımlılıkları yükle
+        run: pip install -r requirements.txt
+
+      - name: Pipeline'ı Çalıştır
+        run: |
+          python main.py > signals_$(date +'%Y-%m-%d').csv
+      - name: Sonuçları Commit ve Push
+        run: |
+          git config user.name "github-sonerok81"
+          git config user.email "sonerok81@github.com"
+          git add signals_*.csv
+          git commit -m "Daily signals for $(date +'%Y-%m-%d')" || echo "No changes"
+          git push
