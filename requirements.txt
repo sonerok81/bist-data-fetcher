@@ -1,0 +1,9 @@
+investpy
+yfinance
+pandas
+numpy
+joblib
+arch
+streamlit
+plotly
+python-dateutil
